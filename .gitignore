@@ -1,8 +1,5 @@
-build
-dist
-
-src/robomaster.egg-info
-__pycache__
-
 RoboMaster-SDK/
 README.md
+
+virtualenvname/
+
