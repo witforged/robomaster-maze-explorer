@@ -2,7 +2,8 @@ import time
 import math
 import numpy as np
 import matplotlib.pyplot as plt
-from robomaster import robot
+from robomaster import robot, vision  # เพิ่ม vision สำหรับ marker
+import threading  # ใช้ล็อก markers ให้ปลอดภัย
 
 # ===================== PID Controller Class =====================
 class PIDController:
@@ -29,8 +30,12 @@ class Control:
         self.ep_chassis = self.ep_robot.chassis
         self.ep_gimbal  = self.ep_robot.gimbal
         self.ep_sensor  = self.ep_robot.sensor
+
+        # ----- State -----
         self.last_distance_cm = None
         self.current_x, self.current_y, self.current_yaw = 0.0, 0.0, 0.0
+
+        # ----- Callbacks (odometry/attitude/distance) -----
         def _dist_cb(sub_info):
             try:
                 mm = int(sub_info[0])
@@ -40,12 +45,42 @@ class Control:
             self.current_yaw = float(attitude_info[0])
         def _pos_cb(position_info):
             self.current_x, self.current_y = float(position_info[0]), float(position_info[1])
+
         self.ep_gimbal.recenter().wait_for_completed()
         self.ep_chassis.sub_attitude(freq=10, callback=_att_cb)
         self.ep_chassis.sub_position(freq=50, callback=_pos_cb)
         self._dist_subscribed = False
         self._dist_cb = _dist_cb
+
+        # ---------- VISION (Marker Detection — ไม่มี Action) ----------
+        self.ep_camera = self.ep_robot.camera
+        self.ep_vision = self.ep_robot.vision
+        self._markers = []
+        self._markers_lock = threading.Lock()
+
+        def _on_markers(marker_info):
+            now = time.time()
+            with self._markers_lock:
+                # เก็บล่าสุดทับของเดิม (เบาเครื่อง + พอสำหรับสถานะปัจจุบัน)
+                self._markers = [
+                    {"x": x, "y": y, "w": w, "h": h, "info": info, "ts": now}
+                    for (x, y, w, h, info) in marker_info
+                ]
+
+        # ต้องเปิด video stream ก่อน ถึงจะ detect ได้
+        self.ep_camera.start_video_stream(display=False)
+        self.ep_vision.sub_detect_info(name="marker", callback=_on_markers)
+
         time.sleep(1.0)
+
+    # ----- Marker getters -----
+    def get_markers(self, max_age=0.6):
+        """คืน list markers (normalized 0..1) ภายในช่วง max_age วินาที"""
+        now = time.time()
+        with self._markers_lock:
+            return [m for m in self._markers if now - m["ts"] <= max_age]
+
+    # ----- Chassis/Gimbal helpers -----
     def get_yaw_deg(self): return self.current_yaw
     def get_xy_m(self): return self.current_x, self.current_y
     def _sub_distance(self, freq=20):
@@ -58,6 +93,7 @@ class Control:
             self._dist_subscribed = False
     def read_distance_at(self, yaw_angle_deg, samples=5, timeout_s=1.0):
         self.last_distance_cm = None
+        # หมายเหตุ: ถ้า SDK ไม่รองรับ yaw_speed ให้ลบพารามิเตอร์นี้ออก
         self.ep_gimbal.moveto(pitch=0, yaw=yaw_angle_deg, yaw_speed=180).wait_for_completed()
         distances = []
         self._sub_distance()
@@ -79,17 +115,13 @@ class Control:
         }
         self.ep_gimbal.moveto(pitch=0, yaw=0, yaw_speed=180).wait_for_completed()
         return dist
-
     def stop(self):
-        """สั่งให้หุ่นหยุดนิ่งทันทีและเคลียร์คำสั่งเคลื่อนที่เก่า"""
         self.ep_chassis.drive_speed(x=0, y=0, z=0, timeout=0.2)
-        time.sleep(0.2) # รอเล็กน้อยเพื่อให้แน่ใจว่าหุ่นหยุดสนิท
-
+        time.sleep(0.2)
     def turn(self, angle_deg):
         print(f"Action: Turning {angle_deg:.1f} degrees")
         self.ep_chassis.move(x=0, y=0, z=-angle_deg, z_speed=45).wait_for_completed()
         time.sleep(0.5)
-        
     def move_forward_pid(self, cell_size_m, Kp=1.2, Ki=0.05, Kd=0.1, v_clip=0.7, tol_m=0.01):
         print(f"Action: Moving forward {cell_size_m} m")
         pid = PIDController(Kp=Kp, Ki=Ki, Kd=Kd, setpoint=cell_size_m)
@@ -100,15 +132,21 @@ class Control:
             self.ep_chassis.drive_speed(x=speed, y=0, z=0, timeout=0.1)
             if abs(cell_size_m - dist) < tol_m: break
             time.sleep(0.02)
-        self.stop() # ใช้เมธอด stop เพื่อการหยุดที่แน่นอน
+        self.stop()
         print("Movement complete.")
-
     def close(self):
-        try:
-            self.ep_sensor.unsub_distance()
-            self.ep_chassis.unsub_attitude()
-            self.ep_chassis.unsub_position()
-            self.ep_robot.close()
+        # ปิดให้สะอาดทุกตัว
+        try: self.ep_sensor.unsub_distance()
+        except: pass
+        try: self.ep_chassis.unsub_attitude()
+        except: pass
+        try: self.ep_chassis.unsub_position()
+        except: pass
+        try: self.ep_vision.unsub_detect_info(name="marker")
+        except: pass
+        try: self.ep_camera.stop_video_stream()
+        except: pass
+        try: self.ep_robot.close()
         except Exception as e:
             print(f"Error during cleanup: {e}")
 
@@ -129,7 +167,6 @@ def plot_maze(current_cell, visited, walls, path_stack, title="Real-time Maze Ex
     ax.set_aspect('equal', adjustable='box'); ax.grid(True); ax.set_title(title); plt.pause(0.1)
 def finalize_show():
     plt.ioff(); plt.show()
-
 
 # ===================== MazeSolver Class =====================
 class MazeSolver:
@@ -167,23 +204,33 @@ class MazeSolver:
     def _get_direction_to_neighbor(current_cell, target_cell):
         dx = target_cell[0] - current_cell[0]
         dy = target_cell[1] - current_cell[1]
-        if dx == 1: return 1;
-        if dx == -1: return 3;
-        if dy == 1: return 0;
-        if dy == -1: return 2;
+        if dx == 1: return 1
+        if dx == -1: return 3
+        if dy == 1: return 0
+        if dy == -1: return 2
         return None
 
     def explore(self):
-        print("Starting DFS Maze Solver (Fixed Turn Logic)...")
+        print("Starting DFS Maze Solver (marker: detect-only, no action)...")
         while self.path_stack:
             current_cell = self.path_stack[-1]
             plot_maze(current_cell, self.visited, self.walls, self.path_stack)
             print(f"\nPosition: {current_cell}, Orientation: {self.current_orientation} (Yaw: {self.ctrl.get_yaw_deg():.1f}°)")
 
+            # ----- แค่ log ว่าตรวจเจอ marker อะไรบ้าง (ไม่เอาไปใช้) -----
+            markers = self.ctrl.get_markers(max_age=0.6)
+            if markers:
+                ids = [str(m["info"]) for m in markers]
+                xs = [round(m["x"], 3) for m in markers]
+                print(f"[Marker] seen={len(markers)} ids={ids} x={xs}")
+            # -----------------------------------------------------------
+
             if current_cell not in self.maze_map:
                 self._scan_and_map(current_cell)
+
             if self._find_and_move_to_next_cell(current_cell):
                 continue
+
             if not self._backtrack():
                 break
 
@@ -209,7 +256,9 @@ class MazeSolver:
 
     def _find_and_move_to_next_cell(self, cell):
         relative_dirs = self._get_relative_directions(self.current_orientation)
+        # กลับไปใช้ลำดับเดิม L -> F -> R แบบไม่ยุ่งกับ marker
         search_order = [relative_dirs["L"], relative_dirs["F"], relative_dirs["R"]]
+
         for direction in search_order:
             if direction in self.maze_map.get(cell, set()):
                 target_cell = self._get_target_coordinates(cell[0], cell[1], direction)
@@ -240,16 +289,12 @@ class MazeSolver:
         self.ctrl.move_forward_pid(self.CELL_SIZE)
         return True
 
-    # --- MODIFIED METHOD ---
     def _turn_to(self, target_direction):
-        """คำนวณและสั่งให้หุ่นหมุนไปยังทิศทางเป้าหมาย"""
         turn_angle = (target_direction - self.current_orientation) * 90
         if turn_angle > 180: turn_angle -= 360
         if turn_angle < -180: turn_angle += 360
-        
         if abs(turn_angle) > 1:
-            # --- ADDED LINE: Explicitly stop before turning ---
-            self.ctrl.stop() 
+            self.ctrl.stop()
             self.ctrl.turn(turn_angle)
             self.current_orientation = target_direction
 
@@ -259,6 +304,7 @@ if __name__ == "__main__":
     try:
         print("Connecting to robot...")
         ctrl = Control(conn_type="ap")
+        # ถ้าไม่อยากให้ขยับก่อนเริ่ม DFS เอาบรรทัดนี้ออกได้
         ctrl.move_forward_pid(cell_size_m=0.6)
         print("Robot connected. Initializing solver...")
         solver = MazeSolver(ctrl)
