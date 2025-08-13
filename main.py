@@ -253,17 +253,20 @@ def plot_maze(current_cell, visited, walls, path_stack, markers={}, title="Real-
     for x, y in visited:
         ax.add_patch(plt.Rectangle((x - 0.5, y - 0.5), 1, 1, facecolor='lightgray', edgecolor='gray'))
     
-    # >>> CHANGED: วาดกำแพงตาม style ที่ระบุ (ทึบ หรือ ประ)
+    # วาดกำแพงตาม style ที่ระบุ
     for wall, style in walls.items():
         (x1, y1), (x2, y2) = wall
         line_style = '--' if style == 'dashed' else '-'
         color = 'r' if style == 'dashed' else 'k'
         
         if x1 == x2: # Horizontal wall
-            ax.plot([x1 - 0.5, x1 + 0.5], [max(y1, y2) - 0.5, max(y1, y2) - 0.5], color=color, linestyle=line_style, lw=4)
+            ax.plot([x1 - 0.5, x1 + 0.5], [max(y1, y2) - 0.5, max(y1, y2) - 0.5], 
+                   color=color, linestyle=line_style, lw=4)
         else: # Vertical wall
-            ax.plot([max(x1, x2) - 0.5, max(x1, x2) - 0.5], [y1 - 0.5, y1 + 0.5], color=color, linestyle=line_style, lw=4)
+            ax.plot([max(x1, x2) - 0.5, max(x1, x2) - 0.5], [y1 - 0.5, y1 + 0.5], 
+                   color=color, linestyle=line_style, lw=4)
 
+    # แสดง path และตำแหน่งหุ่นยนต์
     if len(path_stack) > 1:
         path_x, path_y = zip(*path_stack)
         ax.plot(path_x, path_y, 'b-o', markersize=5)
@@ -271,15 +274,33 @@ def plot_maze(current_cell, visited, walls, path_stack, markers={}, title="Real-
     cx, cy = current_cell
     ax.plot(cx, cy, 'ro', markersize=12, label='Robot')
     
-    # NEW: Add markers to plot
+    # CHANGED: แสดง markers เป็นสี่เหลี่ยมสีแดง
+    MARKER_SIZE = 0.3  # ขนาดของสี่เหลี่ยม marker
     for wall, marker_num in markers.items():
         (x1, y1), (x2, y2) = wall
-        # Calculate marker position at wall center
+        # คำนวณตำแหน่งกึ่งกลางกำแพง
         mx = (x1 + x2) / 2
         my = (y1 + y2) / 2
-        ax.text(mx, my, str(marker_num), color='red', fontsize=12, 
-                ha='center', va='center', bbox=dict(facecolor='white', alpha=0.7))
+        
+        # สร้างสี่เหลี่ยมสีแดง
+        marker_rect = plt.Rectangle(
+            (mx - MARKER_SIZE/2, my - MARKER_SIZE/2), 
+            MARKER_SIZE, MARKER_SIZE,
+            facecolor='red',
+            edgecolor='darkred',
+            alpha=0.7
+        )
+        ax.add_patch(marker_rect)
+        
+        # เพิ่มตัวเลข marker ในสี่เหลี่ยม
+        ax.text(mx, my, str(marker_num),
+                color='white',
+                fontsize=10,
+                fontweight='bold',
+                ha='center',
+                va='center')
     
+    # ตั้งค่าขอบเขตและแสดงผล
     all_x = [c[0] for c in visited] or [0]
     all_y = [c[1] for c in visited] or [0]
     ax.set_xlim(min(all_x) - 1.5, max(all_x) + 1.5)
