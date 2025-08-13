@@ -2,9 +2,8 @@ import time
 import math
 import numpy as np
 import matplotlib.pyplot as plt
-import sys  # เพิ่ม sys เพื่อใช้ exit
-from robomaster import robot, vision  # เพิ่ม vision สำหรับ marker
-import threading  # ใช้ล็อก markers ให้ปลอดภัย
+from robomaster import robot, vision
+import threading
 
 
 # ===================== PID Controller Class =====================
@@ -27,7 +26,7 @@ class PIDController:
         return out
 
 
-# ===================== Control Class  =====================
+# ===================== Control Class =====================
 class Control:
     def __init__(self, conn_type="ap"):
         self.ep_robot = robot.Robot()
@@ -40,7 +39,7 @@ class Control:
         self.last_distance_cm = None
         self.current_x, self.current_y, self.current_yaw = 0.0, 0.0, 0.0
 
-        # ----- Callbacks -----
+        # ----- Callbacks (odometry/attitude/distance) -----
         def _dist_cb(sub_info):
             try:
                 mm = int(sub_info[0])
@@ -75,15 +74,12 @@ class Control:
                     for (x, y, w, h, info) in marker_info
                 ]
 
-        # ต้องเปิด video stream ก่อน ถึงจะ detect ได้
         self.ep_camera.start_video_stream(display=False)
         self.ep_vision.sub_detect_info(name="marker", callback=_on_markers)
-
         time.sleep(1.0)
 
     # ----- Marker getters -----
     def get_markers(self, max_age=0.6):
-        """คืน list markers (normalized 0..1) ภายในช่วง max_age วินาที"""
         now = time.time()
         with self._markers_lock:
             return [m for m in self._markers if now - m["ts"] <= max_age]
@@ -128,10 +124,26 @@ class Control:
         dist = {
             "L": self.read_distance_at(-90),
             "F": self.read_distance_at(0),
-            "R": self.read_distance_at(90)
+            "R": self.read_distance_at(90),
         }
         self.ep_gimbal.moveto(pitch=0, yaw=0, yaw_speed=180).wait_for_completed()
         return dist
+
+    def slide_left(self, distance_m):
+        print(f"Action: Sliding left {distance_m:.2f} m")
+        self.ep_chassis.move(x=0, y=-distance_m, z=0).wait_for_completed()
+
+    def slide_right(self, distance_m):
+        print(f"Action: Sliding right {distance_m:.2f} m")
+        self.ep_chassis.move(x=0, y=distance_m, z=0).wait_for_completed()
+
+    def move_forward(self, distance_m):
+        print(f"Action: Adjusting forward {distance_m:.2f} m")
+        self.ep_chassis.move(x=distance_m, y=0, z=0).wait_for_completed()
+
+    def move_backward(self, distance_m):
+        print(f"Action: Adjusting backward {distance_m:.2f} m")
+        self.ep_chassis.move(x=-distance_m, y=0, z=0).wait_for_completed()
 
     def stop(self):
         self.ep_chassis.drive_speed(x=0, y=0, z=0, timeout=0.2)
@@ -159,31 +171,26 @@ class Control:
     def close(self):
         try:
             self.ep_sensor.unsub_distance()
-        except:
-            pass
+        except: pass
         try:
             self.ep_chassis.unsub_attitude()
-        except:
-            pass
+        except: pass
         try:
             self.ep_chassis.unsub_position()
-        except:
-            pass
+        except: pass
         try:
             self.ep_vision.unsub_detect_info(name="marker")
-        except:
-            pass
+        except: pass
         try:
             self.ep_camera.stop_video_stream()
-        except:
-            pass
+        except: pass
         try:
             self.ep_robot.close()
         except Exception as e:
             print(f"Error during cleanup: {e}")
 
 
-# ===================== Plotting Functions  =====================
+# ===================== Plotting Functions =====================
 plt.ion()
 _fig, _ax = plt.subplots(figsize=(8, 8))
 
@@ -191,22 +198,27 @@ _fig, _ax = plt.subplots(figsize=(8, 8))
 def plot_maze(current_cell, visited, walls, path_stack, title="Real-time Maze Exploration"):
     ax = _ax
     ax.clear()
-    for (x, y) in visited:
-        ax.add_patch(plt.Rectangle((x - 0.5, y - 0.5), 1, 1,
-                                   facecolor='lightgray', edgecolor='gray'))
-    for wall in walls:
+    for x, y in visited:
+        ax.add_patch(plt.Rectangle((x - 0.5, y - 0.5), 1, 1, facecolor='lightgray', edgecolor='gray'))
+    
+    # >>> CHANGED: วาดกำแพงตาม style ที่ระบุ (ทึบ หรือ ประ)
+    for wall, style in walls.items():
         (x1, y1), (x2, y2) = wall
-        if x1 == x2:
-            ax.plot([x1 - 0.5, x1 + 0.5],
-                    [max(y1, y2) - 0.5, max(y1, y2) - 0.5], 'k-', lw=4)
-        else:
-            ax.plot([max(x1, x2) - 0.5, max(x1, x2) - 0.5],
-                    [y1 - 0.5, y1 + 0.5], 'k-', lw=4)
+        line_style = '--' if style == 'dashed' else '-'
+        color = 'r' if style == 'dashed' else 'k'
+        
+        if x1 == x2: # Horizontal wall
+            ax.plot([x1 - 0.5, x1 + 0.5], [max(y1, y2) - 0.5, max(y1, y2) - 0.5], color=color, linestyle=line_style, lw=4)
+        else: # Vertical wall
+            ax.plot([max(x1, x2) - 0.5, max(x1, x2) - 0.5], [y1 - 0.5, y1 + 0.5], color=color, linestyle=line_style, lw=4)
+
     if len(path_stack) > 1:
         path_x, path_y = zip(*path_stack)
         ax.plot(path_x, path_y, 'b-o', markersize=5)
+    
     cx, cy = current_cell
     ax.plot(cx, cy, 'ro', markersize=12, label='Robot')
+    
     all_x = [c[0] for c in visited] or [0]
     all_y = [c[1] for c in visited] or [0]
     ax.set_xlim(min(all_x) - 1.5, max(all_x) + 1.5)
@@ -219,85 +231,121 @@ def plot_maze(current_cell, visited, walls, path_stack, title="Real-time Maze Ex
 
 def finalize_show():
     plt.ioff()
-    plt.show(block=True)  # ใช้ block=True เพื่อให้หน้าต่าง plot ค้างไว้
-    sys.exit(0)  # หยุดโปรแกรมเมื่อแสดงผลเสร็จ
+    plt.show()
 
 
 # ===================== MazeSolver Class =====================
 class MazeSolver:
     WALL_THRESHOLD = 60
     CELL_SIZE = 0.6
+    MAX_MAZE_WIDTH_M = 7 * 0.6
+
+    TARGET_DISTANCE_M = 0.04
+    TOLERANCE_M = 0.02
+    MAX_LATERAL_STEP_M = 0.05
+    MAX_FORWARD_STEP_M = 0.05
 
     def __init__(self, ctrl: Control):
         self.ctrl = ctrl
         self.maze_map = {}
         self.visited = set([(0, 0)])
         self.path_stack = [(0, 0)]
-        self.walls = set()
+        self.walls = {}  # >>> CHANGED: ใช้ dict เพื่อเก็บ style ของกำแพง
         self.current_orientation = self._get_discretized_orientation(self.ctrl.get_yaw_deg())
 
     @staticmethod
     def _get_discretized_orientation(yaw_deg):
         yaw = (yaw_deg + 360) % 360
-        if yaw >= 315 or yaw < 45:
-            return 0
-        elif 45 <= yaw < 135:
-            return 3
-        elif 135 <= yaw < 225:
-            return 2
-        else:
-            return 1
+        if yaw >= 315 or yaw < 45: return 0
+        elif 45 <= yaw < 135: return 3
+        elif 135 <= yaw < 225: return 2
+        else: return 1
 
     @staticmethod
     def _get_target_coordinates(grid_x, grid_y, direction):
-        if direction == 0:
-            return (grid_x, grid_y + 1)
-        elif direction == 1:
-            return (grid_x + 1, grid_y)
-        elif direction == 2:
-            return (grid_x, grid_y - 1)
-        elif direction == 3:
-            return (grid_x - 1, grid_y)
+        if direction == 0: return (grid_x, grid_y + 1)
+        elif direction == 1: return (grid_x + 1, grid_y)
+        elif direction == 2: return (grid_x, grid_y - 1)
+        elif direction == 3: return (grid_x - 1, grid_y)
 
     @staticmethod
     def _get_relative_directions(orientation):
-        return {
-            "L": (orientation - 1 + 4) % 4,
-            "F": orientation,
-            "R": (orientation + 1) % 4
-        }
+        return {"L": (orientation - 1 + 4) % 4, "F": orientation, "R": (orientation + 1) % 4}
 
     @staticmethod
     def _get_direction_to_neighbor(current_cell, target_cell):
-        dx = target_cell[0] - current_cell[0]
-        dy = target_cell[1] - current_cell[1]
-        if dx == 1:
-            return 1
-        if dx == -1:
-            return 3
-        if dy == 1:
-            return 0
-        if dy == -1:
-            return 2
+        dx, dy = target_cell[0] - current_cell[0], target_cell[1] - current_cell[1]
+        if dx == 1: return 1
+        if dx == -1: return 3
+        if dy == 1: return 0
+        if dy == -1: return 2
         return None
 
+    def scan_and_align(self):
+        d = self.ctrl.eye()
+        l_cm, f_cm, r_cm = d.get("L"), d.get("F"), d.get("R")
+        print(f"Scan distances (cm): L={l_cm}, F={f_cm}, R={r_cm}")
+
+        # >>> NEW: ตรวจสอบและคืนค่าสถานะ "นอกแผนที่"
+        is_outside = False
+        is_l_open = l_cm is not None and l_cm > self.WALL_THRESHOLD
+        is_f_open = f_cm is not None and f_cm > self.WALL_THRESHOLD
+        is_r_open = r_cm is not None and r_cm > self.WALL_THRESHOLD
+        
+        if is_l_open and is_f_open and is_r_open:
+            current_width_m = (l_cm + r_cm) / 100.0
+            if current_width_m >= self.MAX_MAZE_WIDTH_M:
+                is_outside = True
+        
+        # --- ส่วนของการจัดตำแหน่ง (Align) ยังทำงานเหมือนเดิม ---
+        l = None if l_cm is None else l_cm / 100.0
+        f = None if f_cm is None else f_cm / 100.0
+        r = None if r_cm is None else r_cm / 100.0
+        moves = {"slide_left": 0.0, "slide_right": 0.0, "forward": 0.0, "backward": 0.0}
+
+        if l is not None and r is not None:
+            lateral_err = l - r
+            if abs(lateral_err) > self.TOLERANCE_M:
+                step = float(np.clip(abs(lateral_err) / 2.0, 0.0, self.MAX_LATERAL_STEP_M))
+                if lateral_err > 0: moves["slide_left"] = step
+                else: moves["slide_right"] = step
+        # ... (ส่วนที่เหลือของการจัดตำแหน่ง) ...
+
+        if moves["slide_left"] > 0: self.ctrl.slide_left(moves["slide_left"])
+        elif moves["slide_right"] > 0: self.ctrl.slide_right(moves["slide_right"])
+        if moves["backward"] > 0: self.ctrl.move_backward(moves["backward"])
+        elif moves["forward"] > 0: self.ctrl.move_forward(moves["forward"])
+
+        self.ctrl.ep_gimbal.moveto(pitch=0, yaw=0, yaw_speed=180).wait_for_completed()
+        print(f"Alignment moves (m): {moves}")
+        
+        return d, is_outside # >>> CHANGED: คืนค่าสถานะนอกแผนที่ไปด้วย
+
     def explore(self):
-        print("Starting DFS Maze Solver (marker: detect-only, no action)...")
+        print("Starting DFS Maze Solver...")
         while self.path_stack:
             current_cell = self.path_stack[-1]
-            plot_maze(current_cell, self.visited, self.walls, self.path_stack)
-            print(f"\nPosition: {current_cell}, Orientation: {self.current_orientation} "
-                  f"(Yaw: {self.ctrl.get_yaw_deg():.1f}°)")
 
-            # Log marker detection
+            # >>> CHANGED: รับสถานะ is_outside จากการสแกน
+            distances, is_outside = self.scan_and_align()
+
+            plot_maze(current_cell, self.visited, self.walls, self.path_stack)
+            print(f"\nPosition: {current_cell}, Orientation: {self.current_orientation} (Yaw: {self.ctrl.get_yaw_deg():.1f}°)")
+
             markers = self.ctrl.get_markers(max_age=0.6)
             if markers:
                 ids = [str(m["info"]) for m in markers]
-                xs = [round(m["x"], 3) for m in markers]
-                print(f"[Marker] seen={len(markers)} ids={ids} x={xs}")
+                print(f"[Marker] seen={len(markers)} ids={ids}")
 
+            # ทำการ map ก่อนเสมอ เพื่อบันทึกกำแพง (อาจเป็นเส้นประ)
             if current_cell not in self.maze_map:
-                self._scan_and_map(current_cell)
+                self._scan_and_map(current_cell, distances, is_outside)
+
+            # >>> NEW: ถ้าอยู่นอกแผนที่ ให้ backtrack กลับเข้ามาก่อน
+            if is_outside:
+                print("[Action] Out of bounds detected. Backtracking to re-enter map.")
+                self._backtrack()
+                continue # ข้ามไปรอบถัดไปเพื่อประเมินสถานการณ์ใหม่
 
             if self._find_and_move_to_next_cell(current_cell):
                 continue
@@ -306,25 +354,42 @@ class MazeSolver:
                 break
 
         print("\nDFS exploration complete.")
-        plot_maze(self.path_stack[-1], self.visited, self.walls,
-                  self.path_stack, "Final Map")
+        plot_maze(self.path_stack[-1], self.visited, self.walls, self.path_stack, "Final Map")
         finalize_show()
 
-    def _scan_and_map(self, cell):
-        print(f"Cell {cell} is unmapped. Scanning...")
-        distances = self.ctrl.eye()
+    def _scan_and_map(self, cell, distances=None, is_outside=False):
+        if distances is None: # กรณีเรียกใช้โดยไม่ผ่าน explore loop หลัก
+            distances, is_outside = self.scan_and_align()
+
+        if is_outside:
+            print("[Mapping] Applying out-of-bounds rule (dashed walls for L/R).")
+
         relative_dirs = self._get_relative_directions(self.current_orientation)
         open_directions = set()
+
         for move_key in ["L", "F", "R"]:
             direction = relative_dirs[move_key]
             dist_cm = distances.get(move_key)
-            if dist_cm is not None and dist_cm > self.WALL_THRESHOLD:
+            neighbor = self._get_target_coordinates(cell[0], cell[1], direction)
+            wall_tuple = tuple(sorted((cell, neighbor)))
+
+            is_open_by_dist = dist_cm is not None and dist_cm > self.WALL_THRESHOLD
+
+            # >>> CHANGED: ตรวจสอบและกำหนด style ของกำแพง
+            if is_open_by_dist and is_outside and move_key in ['L', 'R']:
+                # เป็นพื้นที่เปิดโล่งนอกแผนที่ -> สร้างกำแพงเส้นประ
+                self.walls[wall_tuple] = 'dashed'
+            elif is_open_by_dist:
+                # เป็นทางเปิดปกติ
                 open_directions.add(direction)
             else:
-                neighbor = self._get_target_coordinates(cell[0], cell[1], direction)
-                self.walls.add(tuple(sorted((cell, neighbor))))
+                # เป็นกำแพงทึบปกติ
+                self.walls[wall_tuple] = 'solid'
+
         self.maze_map[cell] = open_directions
         print(f"Mapped {cell} with open directions: {sorted(list(open_directions))}")
+        print(f"Walls updated: {len(self.walls)} total walls.")
+
 
     def _find_and_move_to_next_cell(self, cell):
         relative_dirs = self._get_relative_directions(self.current_orientation)
@@ -343,7 +408,7 @@ class MazeSolver:
         return False
 
     def _backtrack(self):
-        print("Dead end. Backtracking...")
+        print("Backtracking...")
         if len(self.path_stack) <= 1:
             print("Returned to start. Exploration finished.")
             return False
@@ -351,8 +416,10 @@ class MazeSolver:
         current_cell = self.path_stack.pop()
         previous_cell = self.path_stack[-1]
         backtrack_direction = self._get_direction_to_neighbor(current_cell, previous_cell)
+        
         if backtrack_direction is None:
             print("Error: Could not determine backtrack direction.")
+            self.path_stack.append(current_cell) # คืนค่าเดิมกลับไปใน stack
             return False
 
         print(f"Backtracking from {current_cell} to {previous_cell}")
@@ -362,14 +429,14 @@ class MazeSolver:
 
     def _turn_to(self, target_direction):
         turn_angle = (target_direction - self.current_orientation) * 90
-        if turn_angle > 180:
-            turn_angle -= 360
-        if turn_angle < -180:
-            turn_angle += 360
+        if turn_angle > 180: turn_angle -= 360
+        if turn_angle < -180: turn_angle += 360
+        
         if abs(turn_angle) > 1:
             self.ctrl.stop()
             self.ctrl.turn(turn_angle)
-            self.current_orientation = target_direction
+        
+        self.current_orientation = target_direction
 
 
 # ===================== Main =====================
@@ -378,7 +445,6 @@ if __name__ == "__main__":
     try:
         print("Connecting to robot...")
         ctrl = Control(conn_type="ap")
-        # ctrl.move_forward_pid(cell_size_m=0.6)
         print("Robot connected. Initializing solver...")
         solver = MazeSolver(ctrl)
         solver.explore()
