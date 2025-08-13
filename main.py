@@ -250,23 +250,58 @@ _fig, _ax = plt.subplots(figsize=(8, 8))
 def plot_maze(current_cell, visited, walls, path_stack, markers={}, title="Real-time Maze Exploration"):
     ax = _ax
     ax.clear()
+    
+    # วาดพื้นที่ที่เคยเดินผ่าน
     for x, y in visited:
         ax.add_patch(plt.Rectangle((x - 0.5, y - 0.5), 1, 1, facecolor='lightgray', edgecolor='gray'))
     
-    # วาดกำแพงตาม style ที่ระบุ
+    # วาดกำแพง
     for wall, style in walls.items():
         (x1, y1), (x2, y2) = wall
         line_style = '--' if style == 'dashed' else '-'
         color = 'r' if style == 'dashed' else 'k'
         
-        if x1 == x2: # Horizontal wall
+        if x1 == x2:  # กำแพงแนวนอน
             ax.plot([x1 - 0.5, x1 + 0.5], [max(y1, y2) - 0.5, max(y1, y2) - 0.5], 
-                   color=color, linestyle=line_style, lw=4)
-        else: # Vertical wall
+                   color=color, linestyle=line_style, lw=2)
+            
+            # ถ้ามี marker ที่กำแพงนี้ ให้วาดสี่เหลี่ยมสีแดง
+            if wall in markers:
+                marker_rect = plt.Rectangle(
+                    (x1 - 0.15, max(y1, y2) - 0.65),  # ตำแหน่งเริ่มต้น
+                    0.3, 0.3,  # ขนาด
+                    facecolor='red',
+                    edgecolor='darkred',
+                    alpha=0.7,
+                    zorder=3  # แสดงทับกำแพง
+                )
+                ax.add_patch(marker_rect)
+                # เพิ่มตัวเลข marker
+                ax.text(x1, max(y1, y2) - 0.5, str(markers[wall]),
+                       color='white', ha='center', va='center',
+                       fontweight='bold', fontsize=10, zorder=4)
+                
+        else:  # กำแพงแนวตั้ง
             ax.plot([max(x1, x2) - 0.5, max(x1, x2) - 0.5], [y1 - 0.5, y1 + 0.5], 
-                   color=color, linestyle=line_style, lw=4)
+                   color=color, linestyle=line_style, lw=2)
+            
+            # ถ้ามี marker ที่กำแพงนี้ ให้วาดสี่เหลี่ยมสีแดง
+            if wall in markers:
+                marker_rect = plt.Rectangle(
+                    (max(x1, x2) - 0.65, y1 - 0.15),  # ตำแหน่งเริ่มต้น
+                    0.3, 0.3,  # ขนาด
+                    facecolor='red',
+                    edgecolor='darkred',
+                    alpha=0.7,
+                    zorder=3  # แสดงทับกำแพง
+                )
+                ax.add_patch(marker_rect)
+                # เพิ่มตัวเลข marker
+                ax.text(max(x1, x2) - 0.5, y1, str(markers[wall]),
+                       color='white', ha='center', va='center',
+                       fontweight='bold', fontsize=10, zorder=4)
 
-    # แสดง path และตำแหน่งหุ่นยนต์
+    # วาดเส้นทางและตำแหน่งหุ่นยนต์
     if len(path_stack) > 1:
         path_x, path_y = zip(*path_stack)
         ax.plot(path_x, path_y, 'b-o', markersize=5)
@@ -274,33 +309,7 @@ def plot_maze(current_cell, visited, walls, path_stack, markers={}, title="Real-
     cx, cy = current_cell
     ax.plot(cx, cy, 'ro', markersize=12, label='Robot')
     
-    # CHANGED: แสดง markers เป็นสี่เหลี่ยมสีแดง
-    MARKER_SIZE = 0.3  # ขนาดของสี่เหลี่ยม marker
-    for wall, marker_num in markers.items():
-        (x1, y1), (x2, y2) = wall
-        # คำนวณตำแหน่งกึ่งกลางกำแพง
-        mx = (x1 + x2) / 2
-        my = (y1 + y2) / 2
-        
-        # สร้างสี่เหลี่ยมสีแดง
-        marker_rect = plt.Rectangle(
-            (mx - MARKER_SIZE/2, my - MARKER_SIZE/2), 
-            MARKER_SIZE, MARKER_SIZE,
-            facecolor='red',
-            edgecolor='darkred',
-            alpha=0.7
-        )
-        ax.add_patch(marker_rect)
-        
-        # เพิ่มตัวเลข marker ในสี่เหลี่ยม
-        ax.text(mx, my, str(marker_num),
-                color='white',
-                fontsize=10,
-                fontweight='bold',
-                ha='center',
-                va='center')
-    
-    # ตั้งค่าขอบเขตและแสดงผล
+    # ตั้งค่าขอบเขตและการแสดงผล
     all_x = [c[0] for c in visited] or [0]
     all_y = [c[1] for c in visited] or [0]
     ax.set_xlim(min(all_x) - 1.5, max(all_x) + 1.5)
