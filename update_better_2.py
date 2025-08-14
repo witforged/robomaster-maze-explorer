@@ -25,9 +25,9 @@ except ImportError:
     cv2 = None  # ยังรันได้ แค่จะไม่ได้ช่วยจับ "ก้อนแดง"
 
 # ===================== Config (ปรับได้) =====================
-CAMERA_HFOV_DEG = 78.0     # มุมมองกล้องแนวนอน (deg) ปรับให้ตรงรุ่นเพื่อ map มุมแม่นขึ้น
-RED_MIN_AREA = 600         # px^2 ขั้นต่ำของ "ก้อนแดง" (กัน noise)
-CENTER_DEADBAND = 0.06     # ภาพใกล้กลางแล้วถือว่า "พอ" ไม่หมุนเพิ่ม (~6% ของความกว้างภาพ)
+CAMERA_HFOV_DEG = 78.0      # มุมมองกล้องแนวนอน (deg) ปรับให้ตรงรุ่นเพื่อ map มุมแม่นขึ้น
+RED_MIN_AREA = 600          # px^2 ขั้นต่ำของ "ก้อนแดง" (กัน noise)
+CENTER_DEADBAND = 0.06      # ภาพใกล้กลางแล้วถือว่า "พอ" ไม่หมุนเพิ่ม (~6% ของความกว้างภาพ)
 
 # ====== DFS / Mapping Knobs ======
 WALL_THRESHOLD_CM = 60
@@ -379,22 +379,25 @@ def plot_maze(current_cell, visited, walls, path_stack, title="Real-time Maze Ex
             else:
                 ax.plot([max(x1, x2)-0.5, max(x1, x2)-0.5], [y1-0.5, y1+0.5], 'k-', lw=4)
 
-    # NEW: draw red digit markers centered on walls
+    # <<<<<<<<<<<<<<<<<<<< START: CODE MODIFIED >>>>>>>>>>>>>>>>>>>>
+    # NEW: วาด Marker ตัวเลขสีแดงบนกำแพงโดยตรง
     if wall_markers:
         for wall, label in wall_markers.items():
             (a, b) = wall
             (x1, y1), (x2, y2) = a, b
-            if x1 == x2:  # horizontal (บน/ล่างเซลล์)
+            # คำนวณหาจุดกึ่งกลางของกำแพง
+            if x1 == x2:  # กำแพงแนวนอน (บน/ล่างเซลล์)
                 mx = x1
                 my = max(y1, y2) - 0.5
-            else:         # vertical (ซ้าย/ขวาเซลล์)
+            else:         # กำแพงแนวตั้ง (ซ้าย/ขวาเซลล์)
                 mx = max(x1, x2) - 0.5
                 my = y1
-            size = 0.32
-            ax.add_patch(plt.Rectangle((mx - size/2, my - size/2), size, size,
-                                       facecolor='white', edgecolor='red', linewidth=2))
+            
+            # วาดตัวเลขพร้อมพื้นหลัง (bbox) เพื่อให้มองเห็นชัดเจนและเป็นส่วนหนึ่งของกำแพง
             ax.text(mx, my, str(label), color='red', fontsize=12,
-                    ha='center', va='center', fontweight='bold')
+                    ha='center', va='center', fontweight='bold',
+                    bbox=dict(facecolor='white', edgecolor='red', boxstyle='square,pad=0.2'))
+    # <<<<<<<<<<<<<<<<<<<< END: CODE MODIFIED >>>>>>>>>>>>>>>>>>>>
 
     # path
     if len(path_stack) > 1:
@@ -577,7 +580,7 @@ class MazeSolver:
                 neighbor = self._get_target_coordinates(cell[0], cell[1], direction)
                 wall_tuple = self._wall_tuple(cell, neighbor)
                 if dist_cm is not None and dist_cm > WALL_THRESHOLD_CM:
-                    self.walls[wall_tuple] = 'dashed'   # เปิดสู่ภายนอก
+                    self.walls[wall_tuple] = 'dashed'  # เปิดสู่ภายนอก
                 else:
                     self.walls[wall_tuple] = 'solid'
             self.maze_map[cell] = open_directions
@@ -628,7 +631,7 @@ class MazeSolver:
         x_norm = float(best["x"])
         if 0.0 <= x_norm <= 1.0:  # normalize 0..1 -> -1..1
             x_norm = x_norm*2.0 - 1.0
-        yaw_offset = x_norm * (CAMERA_HFOV_DEG / 2.0)   # deg
+        yaw_offset = x_norm * (CAMERA_HFOV_DEG / 2.0)  # deg
 
         side = self._side_from_yaw_deg(yaw_offset)
         neighbor, _ = self._neighbor_cell_for_side(current_cell, side)
@@ -674,8 +677,8 @@ class MazeSolver:
 
     def _turn_to(self, target_direction):
         turn_angle = (target_direction - self.current_orientation) * 90
-        if turn_angle > 180:   turn_angle -= 360
-        if turn_angle < -180:  turn_angle += 360
+        if turn_angle > 180:  turn_angle -= 360
+        if turn_angle < -180: turn_angle += 360
         if abs(turn_angle) > 1:
             self.ctrl.stop()
             self.ctrl.turn(turn_angle)
