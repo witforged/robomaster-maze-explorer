@@ -115,6 +115,31 @@ class Control:
         }
         self.ep_gimbal.moveto(pitch=0, yaw=0, yaw_speed=180).wait_for_completed()
         return dist
+    
+    def measure_left(self):
+        return self.read_distance_at(-90)
+
+    def measure_front(self):
+        return self.read_distance_at(0)
+
+    def measure_right(self):
+        return self.read_distance_at(90)
+
+    def slide_left(self, distance_m):
+        print(f"Action: Sliding left {distance_m:.2f} m")
+        self.ep_chassis.move(x=0, y=-distance_m, z=0).wait_for_completed()
+
+    def slide_right(self, distance_m):
+        print(f"Action: Sliding right {distance_m:.2f} m")
+        self.ep_chassis.move(x=0, y=distance_m, z=0).wait_for_completed()
+
+    def move_forward(self, distance_m):
+        print(f"Action: Adjusting forward {distance_m:.2f} m")
+        self.ep_chassis.move(x=distance_m, y=0, z=0).wait_for_completed()
+
+    def move_backward(self, distance_m):
+        print(f"Action: Adjusting backward {distance_m:.2f} m")
+        self.ep_chassis.move(x=-distance_m, y=0, z=0).wait_for_completed()
     def stop(self):
         self.ep_chassis.drive_speed(x=0, y=0, z=0, timeout=0.2)
         time.sleep(0.2)
@@ -180,6 +205,8 @@ class MazeSolver:
         self.path_stack = [(0, 0)]
         self.walls = set()
         self.current_orientation = self._get_discretized_orientation(self.ctrl.get_yaw_deg())
+        self.target_distance = 0.20 # เป้าหมายระยะทางที่ต้องการไปถึง (20 cm)
+        self.tolerance = 0.03 # ระยะทางที่ยอมรับได้ (3 cm)
 
     @staticmethod
     def _get_discretized_orientation(yaw_deg):
@@ -210,10 +237,54 @@ class MazeSolver:
         if dy == -1: return 2
         return None
 
+    def align_position(self):
+        """Adjust robot position to maintain ~20 cm from surrounding walls."""
+        while True:
+            left = self.ctrl.measure_left()
+            front = self.ctrl.measure_front()
+            right = self.ctrl.measure_right()
+
+            if left is None or front is None or right is None:
+                break
+
+            left /= 100.0
+            front /= 100.0
+            right /= 100.0
+
+            moved = False
+
+            if left < self.target_distance - self.tolerance:
+                self.ctrl.slide_right(self.target_distance - left)
+                moved = True
+            elif left > self.target_distance + self.tolerance:
+                self.ctrl.slide_left(left - self.target_distance)
+                moved = True
+
+            if right < self.target_distance - self.tolerance:
+                self.ctrl.slide_left(self.target_distance - right)
+                moved = True
+            elif right > self.target_distance + self.tolerance:
+                self.ctrl.slide_right(right - self.target_distance)
+                moved = True
+
+            if front < self.target_distance - self.tolerance:
+                self.ctrl.move_backward(self.target_distance - front)
+                moved = True
+            elif front > self.target_distance + self.tolerance:
+                self.ctrl.move_forward(front - self.target_distance)
+                moved = True
+
+            if not moved:
+                break
+
+        # recenter gimbal after alignment
+        self.ctrl.ep_gimbal.moveto(pitch=0, yaw=0, yaw_speed=180).wait_for_completed()
+    
     def explore(self):
         print("Starting DFS Maze Solver (marker: detect-only, no action)...")
         while self.path_stack:
             current_cell = self.path_stack[-1]
+            self.align_position()  # ปรับตำแหน่งให้ห่างจากผนังประมาณ 20 cm
             plot_maze(current_cell, self.visited, self.walls, self.path_stack)
             print(f"\nPosition: {current_cell}, Orientation: {self.current_orientation} (Yaw: {self.ctrl.get_yaw_deg():.1f}°)")
 
@@ -305,7 +376,7 @@ if __name__ == "__main__":
         print("Connecting to robot...")
         ctrl = Control(conn_type="ap")
         # ถ้าไม่อยากให้ขยับก่อนเริ่ม DFS เอาบรรทัดนี้ออกได้
-        ctrl.move_forward_pid(cell_size_m=0.6)
+        # ctrl.move_forward_pid(cell_size_m=0.6)
         print("Robot connected. Initializing solver...")
         solver = MazeSolver(ctrl)
         solver.explore()
